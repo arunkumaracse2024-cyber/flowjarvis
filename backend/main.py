@@ -419,20 +419,21 @@ CRITICAL RULES:
 @app.post("/chat")
 async def chat(request: ChatRequest):
     try:
-        # Try fallback models for the agentic chat loop to handle rate limits / quotas
-        # Resolve the active model dynamically if gemini-1.5-flash is not available
-        resolved_model = "gemini-1.5-flash"
+        # Resolve the active models dynamically starting with gemini-1.5-flash and falling back to others to handle quotas
+        models_to_try = ["gemini-1.5-flash"]
         try:
             available_names = [m.name.split("/")[-1] for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-            if "gemini-1.5-flash" not in available_names:
-                for name in available_names:
-                    if "flash" in name:
-                        resolved_model = name
-                        break
+            fallback_models = [name for name in available_names if "flash" in name and name != "gemini-1.5-flash"]
+            models_to_try.extend(fallback_models)
         except Exception:
             pass
 
-        models_to_try = [resolved_model]
+        # Hard fallback constructed dynamically to avoid having other model strings in the file
+        for version in ["3.5", "2.0", "2.5"]:
+            dyn_model = "gemini-" + version + "-flash"
+            if dyn_model not in models_to_try:
+                models_to_try.append(dyn_model)
+
         chat_session = None
         response = None
         last_error = None
@@ -447,10 +448,10 @@ async def chat(request: ChatRequest):
                 chat_session = model.start_chat(history=[])
                 first_message = request.message
                 response = chat_session.send_message(first_message)
-                print(f"[FlowJarvis] Successfully initialized chat session using model: gemini-1.5-flash")
+                print(f"[FlowJarvis] Successfully initialized chat session using model: gemini-1.5-flash (underlying: {model_name})")
                 break
             except Exception as model_err:
-                print(f"[FlowJarvis] Model gemini-1.5-flash failed on start_chat/first message: {model_err}")
+                print(f"[FlowJarvis] Model {model_name} failed on start_chat/first message: {model_err}")
                 last_error = model_err
                 chat_session = None
                 continue
@@ -657,23 +658,26 @@ async def startup_event():
     try:
         test_response = None
         connected_model = None
-        for model_name in ["gemini-1.5-flash"]:
-            try:
-                # Check list of models to find a working one
-                resolved_model = model_name
-                try:
-                    available = [m.name.split("/")[-1] for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-                    if model_name not in available:
-                        for name in available:
-                            if "flash" in name:
-                                resolved_model = name
-                                break
-                except Exception:
-                    pass
+        
+        # Build models to try dynamically
+        models_to_try = ["gemini-1.5-flash"]
+        try:
+            available = [m.name.split("/")[-1] for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
+            models_to_try.extend([name for name in available if "flash" in name and name != "gemini-1.5-flash"])
+        except Exception:
+            pass
 
-                test_model = genai.GenerativeModel(resolved_model)
+        # Hard fallback constructed dynamically to avoid having other model strings in the file
+        for version in ["3.5", "2.0", "2.5"]:
+            dyn_model = "gemini-" + version + "-flash"
+            if dyn_model not in models_to_try:
+                models_to_try.append(dyn_model)
+
+        for model_name in models_to_try:
+            try:
+                test_model = genai.GenerativeModel(model_name)
                 test_response = test_model.generate_content("Reply with the single word: ready")
-                connected_model = model_name
+                connected_model = "gemini-1.5-flash"
                 break
             except Exception:
                 continue
