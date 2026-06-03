@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FlowJarvis — Operations Co-Pilot</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"DM Mono"', 'monospace'],
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+          },
+          colors: {
+            slate: {
+              950: '#0a0f1e',
+              900: '#0f172a',
+              850: '#131c32',
+              800: '#1e293b',
+              700: '#334155',
+              600: '#475569',
+              400: '#94a3b8',
+              300: '#cbd5e1',
+              200: '#e2e8f0',
+            },
+            risk: {
+              low:      '#22c55e',
+              medium:   '#f59e0b',
+              high:     '#f97316',
+              critical: '#ef4444',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0a0f1e;
+      color: #e2e8f0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .font-mono { font-family: 'DM Mono', monospace; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+    .chat-scroll { overflow-y: auto; scroll-behavior: smooth; }
+    @keyframes pulse-slow { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    @keyframes fade-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes shimmer {
+      0%{background-position:200% center}
+      100%{background-position:-200% center}
+    }
+    .animate-pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
+    .animate-fade-in { animation: fade-in 0.4s ease-out forwards; }
+    .loading-bar {
+      background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+    .risk-bar-fill { transition: width 1s ease-out; }
+    .card-glow-blue { box-shadow: 0 0 0 1px rgba(59,130,246,0.3), 0 4px 24px rgba(59,130,246,0.08); }
+    .card-glow-red  { box-shadow: 0 0 0 1px rgba(239,68,68,0.3),  0 4px 24px rgba(239,68,68,0.08); }
+    .card-glow-amber{ box-shadow: 0 0 0 1px rgba(245,158,11,0.3), 0 4px 24px rgba(245,158,11,0.08); }
+    .capacity-tile:hover .tooltip { display:block; }
+    .tooltip { display:none; position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+      background:#1e293b; border:1px solid #334155; padding:4px 8px; border-radius:4px;
+      font-size:11px; white-space:nowrap; z-index:10; pointer-events:none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    // CONSTANTS
+    const API_BASE = "http://localhost:8000";
+
+    const PRESET_QUESTIONS = [
+      "Should we take on a new mobile app project for a client starting next month?",
+      "Which teams are at risk of burnout right now?",
+      "Should we hire a contract backend engineer for the ERP Migration?"
+    ];
+
+    const RISK_COLORS = {
+      low:      { bg: 'bg-green-500/20',  border: 'border-green-500/50',  text: 'text-green-400',  bar: '#22c55e' },
+      medium:   { bg: 'bg-amber-500/20',  border: 'border-amber-500/50',  text: 'text-amber-400',  bar: '#f59e0b' },
+      high:     { bg: 'bg-orange-500/20', border: 'border-orange-500/50', text: 'text-orange-400', bar: '#f97316' },
+      critical: { bg: 'bg-red-500/20',    border: 'border-red-500/50',    text: 'text-red-400',    bar: '#ef4444' }
+    };
+
+    const HEALTH_CONFIG = {
+      green:  { dot: '🟢', color: 'text-green-400',  bg: 'bg-green-500/10'  },
+      yellow: { dot: '🟡', color: 'text-amber-400',  bg: 'bg-amber-500/10'  },
+      red:    { dot: '🔴', color: 'text-red-400',    bg: 'bg-red-500/10'    }
+    };
+
+    const CAPACITY_COLOR = (pct) => {
+      if (pct <= 49) return { bar: '#22c55e', bg: 'bg-green-500/15', text: 'text-green-400', label: 'Available' };
+      if (pct <= 74) return { bar: '#f59e0b', bg: 'bg-amber-500/15', text: 'text-amber-400', label: 'Moderate' };
+      if (pct <= 89) return { bar: '#f97316', bg: 'bg-orange-500/15', text: 'text-orange-400', label: 'Overloaded' };
+      return { bar: '#ef4444', bg: 'bg-red-500/15', text: 'text-red-400', label: 'Critical' };
+    };
+
+    // COMPONENT: RiskMeterCard
+    function RiskMeterCard({ analysis }) {
+      const risk = RISK_COLORS[analysis.risk_level] || RISK_COLORS.medium;
+      return (
+        <div className={`rounded-xl border ${risk.border} ${risk.bg} p-5 animate-fade-in card-glow-${analysis.risk_level === 'low' ? 'blue' : analysis.risk_level === 'critical' || analysis.risk_level === 'high' ? 'red' : 'amber'}`}>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">Risk Assessment</span>
+            <span className={`font-mono text-xs font-500 px-3 py-1 rounded-full border ${risk.border} ${risk.text} ${risk.bg} uppercase tracking-wider`}>
+              {analysis.risk_level}
+            </span>
+          </div>
+
+          {/* Risk Score Bar */}
+          <div className="mb-4">
+            <div className="flex justify-between items-center mb-1.5">
+              <span className="text-xs text-slate-400 font-mono">Risk Score</span>
+              <span className={`text-lg font-mono font-500 ${risk.text}`}>{analysis.risk_score}/100</span>
+            </div>
+            <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full risk-bar-fill"
+                style={{ width: `${analysis.risk_score}%`, backgroundColor: risk.bar }}
+              />
+            </div>
+            <div className="flex justify-between mt-1">
+              <span className="text-xs text-slate-600 font-mono">Low</span>
+              <span className="text-xs text-slate-600 font-mono">Critical</span>
+            </div>
+          </div>
+
+          {/* Recommendation */}
+          <div className="mb-3">
+            <p className="text-sm text-slate-200 leading-relaxed font-500">{analysis.recommendation}</p>
+          </div>
+
+          {/* Safe-Fail Plan */}
+          <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-400 text-sm mt-0.5">⚡</span>
+              <div>
+                <span className="text-xs font-mono text-amber-400 uppercase tracking-wider block mb-1">Safe-Fail Plan</span>
+                <p className="text-xs text-slate-300 leading-relaxed">{analysis.safe_fail_plan}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Confidence */}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <span className="text-xs text-slate-500 font-mono">Confidence:</span>
+            <span className="text-xs font-mono text-slate-300">{analysis.confidence}%</span>
+          </div>
+        </div>
+      );
+    }
+
+    // COMPONENT: CapacityHeatmapCard
+    function CapacityHeatmapCard({ analysis }) {
+      const { capacity_summary, key_employees } = analysis;
+      return (
+        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-5 animate-fade-in" style={{animationDelay:'0.1s'}}>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">Capacity Heatmap</span>
+            <span className="text-xs font-mono text-slate-500">
+              Bottleneck: <span className="text-orange-400">{capacity_summary.bottleneck}</span>
+            </span>
+          </div>
+
+          {/* Department tiles */}
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {capacity_summary.department_breakdown && capacity_summary.department_breakdown.map((dept) => {
+              const c = CAPACITY_COLOR(dept.avg_capacity_pct);
+              const isBottleneck = dept.department === capacity_summary.bottleneck;
+              return (
+                <div
+                  key={dept.department}
+                  className={`relative capacity-tile rounded-lg p-3 ${c.bg} border ${isBottleneck ? 'border-orange-500/70' : 'border-slate-700/30'} cursor-default`}
+                  style={isBottleneck ? {boxShadow:'0 0 12px rgba(249,115,22,0.2)'} : {}}
+                >
+                  <div className="tooltip">
+                    {dept.department} · avg {dept.avg_capacity_pct}% utilized · {dept.status}
+                  </div>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <span className="text-xs font-500 text-slate-200">{dept.department}</span>
+                    {isBottleneck && <span className="text-xs text-orange-400">⚠</span>}
+                  </div>
+                  <div className="h-1.5 bg-slate-700/50 rounded-full overflow-hidden mb-1.5">
+                    <div className="h-full rounded-full" style={{width:`${dept.avg_capacity_pct}%`, backgroundColor: c.bar, transition:'width 1s ease-out'}} />
+                  </div>
+                  <span className={`text-xs font-mono ${c.text}`}>{dept.avg_capacity_pct}% · {dept.status}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Key employees section */}
+          {key_employees && key_employees.length > 0 && (
+            <div>
+              <span className="text-xs font-mono text-slate-500 uppercase tracking-wider block mb-2">Key Personnel</span>
+              <div className="space-y-1.5">
+                {key_employees.slice(0, 5).map((emp) => {
+                  const c = CAPACITY_COLOR(emp.capacity_pct);
+                  return (
+                    <div key={emp.name} className="flex items-center justify-between bg-slate-900/40 rounded-lg px-3 py-2">
+                      <div>
+                        <span className="text-xs text-slate-200 font-500">{emp.name}</span>
+                        <span className="text-xs text-slate-500 ml-2">{emp.role}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs font-mono ${c.text}`}>{emp.capacity_pct}%</span>
+                        <span className="text-xs text-slate-600 font-mono">avail {emp.available_from}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Earliest start date */}
+          <div className="mt-3 pt-3 border-t border-slate-700/30 flex justify-between">
+            <span className="text-xs text-slate-500 font-mono">Earliest realistic start</span>
+            <span className="text-xs font-mono text-blue-400">{capacity_summary.earliest_start}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // COMPONENT: ProjectHealthCard
+    function ProjectHealthCard({ analysis }) {
+      return (
+        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-5 animate-fade-in" style={{animationDelay:'0.2s'}}>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">Active Projects</span>
+            <span className="text-xs font-mono text-slate-500">{analysis.project_health.length} projects tracked</span>
+          </div>
+          <div className="space-y-3">
+            {analysis.project_health.map((project) => {
+              const h = HEALTH_CONFIG[project.health] || HEALTH_CONFIG.yellow;
+              const burnColor = project.burn_rate > 80 ? '#ef4444' : project.burn_rate > 50 ? '#f59e0b' : '#22c55e';
+              return (
+                <div key={project.name} className={`rounded-lg p-3 ${h.bg} border border-slate-700/30`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span>{h.dot}</span>
+                      <span className="text-sm font-500 text-slate-200">{project.name}</span>
+                    </div>
+                    <span className="text-xs font-mono text-slate-500">{project.end_date}</span>
+                  </div>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-xs text-slate-500 font-mono w-20">Burn rate</span>
+                    <div className="flex-1 h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{width:`${project.burn_rate}%`, backgroundColor: burnColor, transition:'width 1s ease-out'}} />
+                    </div>
+                    <span className="text-xs font-mono" style={{color: burnColor}}>{project.burn_rate}%</span>
+                  </div>
+                  {project.risk_note && (
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">{project.risk_note}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // COMPONENT: MarketContextCard
+    function MarketContextCard({ analysis }) {
+      return (
+        <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5 animate-fade-in" style={{animationDelay:'0.3s'}}>
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">Market Intelligence</span>
+            <span className="text-xs font-mono text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+              External Data
+            </span>
+          </div>
+          <p className="text-sm text-slate-300 leading-relaxed mb-4">{analysis.market_context}</p>
+          <div>
+            <span className="text-xs font-mono text-slate-500 uppercase tracking-wider block mb-2">Key Risks Identified</span>
+            <ul className="space-y-1.5">
+              {analysis.key_risks.map((risk, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-slate-300">
+                  <span className="text-amber-400 mt-0.5 flex-shrink-0">▸</span>
+                  <span>{risk}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      );
+    }
+
+    // COMPONENT: DashboardPanel
+    function DashboardPanel({ dashboardData }) {
+      if (!dashboardData) {
+        return (
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+            <span className="text-xs font-mono text-slate-500">Loading dashboard...</span>
+          </div>
+        );
+      }
+
+      const stats = [
+        {
+          label: 'Total Employees',
+          value: dashboardData.total_employees,
+          sub: 'across all departments',
+          color: 'text-slate-200',
+          glow: ''
+        },
+        {
+          label: 'Overloaded Staff',
+          value: dashboardData.overloaded_count,
+          sub: 'capacity > 75%',
+          color: dashboardData.overloaded_count > 3 ? 'text-orange-400' : 'text-slate-200',
+          glow: dashboardData.overloaded_count > 3 ? 'card-glow-red' : ''
+        },
+        {
+          label: 'Critical Overload',
+          value: dashboardData.critical_count,
+          sub: 'capacity > 90%',
+          color: dashboardData.critical_count > 0 ? 'text-red-400' : 'text-green-400',
+          glow: dashboardData.critical_count > 0 ? 'card-glow-red' : ''
+        },
+        {
+          label: 'Active Projects',
+          value: dashboardData.active_projects,
+          sub: 'in progress now',
+          color: 'text-blue-400',
+          glow: 'card-glow-blue'
+        },
+        {
+          label: 'At-Risk Projects',
+          value: dashboardData.red_projects,
+          sub: 'health status: red',
+          color: dashboardData.red_projects > 0 ? 'text-red-400' : 'text-green-400',
+          glow: dashboardData.red_projects > 0 ? 'card-glow-red' : ''
+        },
+        {
+          label: 'Avg Team Capacity',
+          value: `${dashboardData.avg_capacity}%`,
+          sub: 'company-wide utilization',
+          color: dashboardData.avg_capacity > 75 ? 'text-orange-400' : 'text-slate-200',
+          glow: ''
+        }
+      ];
+
+      return (
+        <div className="flex flex-col h-full">
+          <div className="mb-4">
+            <h2 className="text-sm font-mono text-slate-400 uppercase tracking-widest mb-1">Live Operations Dashboard</h2>
+            <p className="text-xs text-slate-600">Ask a question in the chat to get a full strategic analysis</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {stats.map((stat) => (
+              <div key={stat.label} className={`bg-slate-800/60 border border-slate-700/40 rounded-xl p-4 ${stat.glow}`}>
+                <div className={`text-2xl font-mono font-500 mb-1 ${stat.color}`}>{stat.value}</div>
+                <div className="text-xs font-500 text-slate-300 mb-0.5">{stat.label}</div>
+                <div className="text-xs text-slate-600">{stat.sub}</div>
+              </div>
+            ))}
+          </div>
+          {dashboardData.department_summary && (
+            <div className="bg-slate-800/40 border border-slate-700/30 rounded-xl p-4">
+              <span className="text-xs font-mono text-slate-500 uppercase tracking-wider block mb-3">Department Utilization</span>
+              <div className="space-y-2">
+                {Object.entries(dashboardData.department_summary).map(([dept, info]) => {
+                  const c = CAPACITY_COLOR(info.avg);
+                  return (
+                    <div key={dept} className="flex items-center gap-3">
+                      <span className="text-xs text-slate-300 w-24 flex-shrink-0">{dept}</span>
+                      <div className="flex-1 h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{width:`${info.avg}%`, backgroundColor: c.bar}} />
+                      </div>
+                      <span className={`text-xs font-mono ${c.text} w-12 text-right`}>{info.avg}%</span>
+                      <span className="text-xs text-slate-600 w-8 font-mono">{info.count}p</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // COMPONENT: LoadingPanel
+    function LoadingPanel() {
+      const [step, setStep] = React.useState(0);
+      React.useEffect(() => {
+        const t1 = setTimeout(() => setStep(1), 600);
+        const t2 = setTimeout(() => setStep(2), 1400);
+        return () => { clearTimeout(t1); clearTimeout(t2); };
+      }, []);
+      return (
+        <div className="flex flex-col h-full items-center justify-center gap-6">
+          <div className="relative">
+            <div className="w-12 h-12 border-2 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-blue-400 text-lg">⚡</span>
+            </div>
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-500 text-slate-200 mb-1">FlowJarvis is analyzing...</p>
+            <p className={`text-xs font-mono text-slate-500 transition-opacity duration-500 ${step >= 1 ? 'opacity-100' : 'opacity-0'}`}>
+              ↳ Auditing internal capacity & sprint data
+            </p>
+            <p className={`text-xs font-mono text-slate-500 transition-opacity duration-500 ${step >= 2 ? 'opacity-100' : 'opacity-0'}`}>
+              ↳ Scanning market context & industry data
+            </p>
+          </div>
+          <div className="w-full space-y-3 px-4">
+            {[1,2,3,4].map(i => (
+              <div key={i} className="loading-bar h-12 rounded-lg" style={{animationDelay:`${i*0.15}s`}} />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // COMPONENT: AnalysisPanel
+    function AnalysisPanel({ analysis, onReset }) {
+      return (
+        <div className="flex flex-col h-full overflow-y-auto chat-scroll">
+          <div className="flex items-center justify-between mb-4 flex-shrink-0">
+            <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">Strategic Analysis</span>
+            <button
+              onClick={onReset}
+              className="text-xs font-mono text-slate-500 hover:text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              ↩ New Analysis
+            </button>
+          </div>
+          <div className="space-y-4 pb-4">
+            <RiskMeterCard analysis={analysis} />
+            <CapacityHeatmapCard analysis={analysis} />
+            <ProjectHealthCard analysis={analysis} />
+            <MarketContextCard analysis={analysis} />
+          </div>
+        </div>
+      );
+    }
+
+    // COMPONENT: ChatPanel
+    function ChatPanel({ messages, isLoading, inputValue, setInputValue, onSend, chatEndRef }) {
+      const hasMessages = messages.length > 0;
+
+      return (
+        <div className="flex flex-col h-full border-r border-slate-800">
+          {/* Header */}
+          <div className="flex-shrink-0 px-5 py-4 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 bg-blue-500/20 border border-blue-500/40 rounded-lg flex items-center justify-center">
+                <span className="text-blue-400 text-sm">⚡</span>
+              </div>
+              <div>
+                <h1 className="text-sm font-600 text-slate-100">FlowJarvis</h1>
+                <p className="text-xs text-slate-500 font-mono">Operations Co-Pilot</p>
+              </div>
+              <div className="ml-auto flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse-slow" />
+                <span className="text-xs font-mono text-slate-600">live</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Chat body */}
+          <div className="flex-1 overflow-y-auto chat-scroll px-4 py-4">
+            {!hasMessages ? (
+              /* Welcome screen */
+              <div className="flex flex-col h-full justify-center gap-5">
+                <div>
+                  <h2 className="text-base font-600 text-slate-100 mb-1">Your Operations Intelligence Layer</h2>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Ask any business decision question. FlowJarvis audits your team capacity and scans the market simultaneously.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <span className="text-xs font-mono text-slate-600 uppercase tracking-wider">Try asking</span>
+                  {PRESET_QUESTIONS.map((q, i) => (
+                    <button
+                      key={i}
+                      onClick={() => { setInputValue(q); }}
+                      className="w-full text-left text-xs text-slate-300 bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/50 hover:border-slate-600/50 rounded-lg px-3 py-2.5 transition-all leading-relaxed"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Message history */
+              <div className="space-y-3">
+                {messages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+                    {msg.role === 'user' ? (
+                      <div className="max-w-[80%] bg-blue-600/80 border border-blue-500/40 rounded-2xl rounded-tr-sm px-3.5 py-2.5">
+                        <p className="text-xs text-blue-50 leading-relaxed">{msg.content}</p>
+                      </div>
+                    ) : (
+                      <div className="max-w-[85%] bg-slate-800/80 border border-slate-700/40 rounded-2xl rounded-tl-sm px-3.5 py-2.5">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span className="text-blue-400 text-xs">⚡</span>
+                          <span className="text-xs font-mono text-slate-500">FlowJarvis</span>
+                        </div>
+                        <p className="text-xs text-slate-200 leading-relaxed">{msg.content}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {isLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-slate-800/80 border border-slate-700/40 rounded-2xl rounded-tl-sm px-3.5 py-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{animationDelay:'0s'}} />
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{animationDelay:'0.15s'}} />
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{animationDelay:'0.3s'}} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* Preset buttons */}
+          {hasMessages && (
+            <div className="flex-shrink-0 px-4 pb-2 flex gap-1.5 overflow-x-auto">
+              {PRESET_QUESTIONS.map((q, i) => (
+                <button
+                  key={i}
+                  onClick={() => setInputValue(q)}
+                  className="flex-shrink-0 text-xs text-slate-400 bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/40 rounded-full px-3 py-1.5 transition-colors"
+                >
+                  {['🏗️', '🔥', '👷'][i]} {['New project?', 'Burnout risk?', 'Hire contractor?'][i]}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Input area */}
+          <div className="flex-shrink-0 px-4 pb-4 pt-2 border-t border-slate-800">
+            <div className="flex gap-2 items-end">
+              <textarea
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (inputValue.trim() && !isLoading) onSend(inputValue.trim());
+                  }
+                }}
+                placeholder="Ask a business decision question..."
+                rows={2}
+                className="flex-1 bg-slate-800/80 border border-slate-700/50 focus:border-blue-500/50 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 placeholder-slate-600 outline-none resize-none font-sans leading-relaxed transition-colors"
+              />
+              <button
+                onClick={() => { if (inputValue.trim() && !isLoading) onSend(inputValue.trim()); }}
+                disabled={!inputValue.trim() || isLoading}
+                className="flex-shrink-0 w-9 h-9 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl flex items-center justify-center transition-colors"
+              >
+                <span className="text-sm">{isLoading ? '⌛' : '↑'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // MAIN APP COMPONENT
+    function App() {
+      const [messages, setMessages] = React.useState([]);
+      const [analysisData, setAnalysisData] = React.useState(null);
+      const [dashboardData, setDashboardData] = React.useState(null);
+      const [isLoading, setIsLoading] = React.useState(false);
+      const [inputValue, setInputValue] = React.useState('');
+      const [panelState, setPanelState] = React.useState('dashboard'); // 'dashboard' | 'loading' | 'analysis'
+      const chatEndRef = React.useRef(null);
+
+      // Fetch dashboard on mount
+      React.useEffect(() => {
+        fetch(`${API_BASE}/dashboard`)
+          .then(r => r.json())
+          .then(data => setDashboardData(data))
+          .catch(err => console.error('Dashboard fetch failed:', err));
+      }, []);
+
+      // Scroll chat to bottom on new messages
+      React.useEffect(() => {
+        if (chatEndRef.current) {
+          chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, [messages, isLoading]);
+
+      const sendMessage = async (text) => {
+        if (!text.trim() || isLoading) return;
+
+        // Add user message
+        const userMsg = { role: 'user', content: text };
+        setMessages(prev => [...prev, userMsg]);
+        setInputValue('');
+        setIsLoading(true);
+        setPanelState('loading');
+
+        try {
+          const res = await fetch(`${API_BASE}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: text,
+              conversation_history: messages
+            })
+          });
+          const data = await res.json();
+
+          if (data.error) {
+            const errorMsg = {
+              role: 'assistant',
+              content: data.error_message || 'Analysis failed. Please try again.'
+            };
+            setMessages(prev => [...prev, errorMsg]);
+            setPanelState('dashboard');
+          } else {
+            const analysis = data.analysis;
+            setAnalysisData(analysis);
+
+            // Build assistant message from recommendation + safe_fail_plan
+            const assistantContent = `${analysis.recommendation} ${analysis.safe_fail_plan}`;
+            const assistantMsg = { role: 'assistant', content: assistantContent };
+            setMessages(prev => [...prev, assistantMsg]);
+            setPanelState('analysis');
+          }
+        } catch (err) {
+          const errorMsg = {
+            role: 'assistant',
+            content: 'Could not connect to the backend. Make sure the server is running at http://localhost:8000.'
+          };
+          setMessages(prev => [...prev, errorMsg]);
+          setPanelState('dashboard');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const resetAnalysis = () => {
+        setAnalysisData(null);
+        setPanelState('dashboard');
+      };
+
+      return (
+        <div className="flex h-screen bg-slate-950">
+          {/* Left: Chat panel — 38% width */}
+          <div className="w-[38%] flex flex-col">
+            <ChatPanel
+              messages={messages}
+              isLoading={isLoading}
+              inputValue={inputValue}
+              setInputValue={setInputValue}
+              onSend={sendMessage}
+              chatEndRef={chatEndRef}
+            />
+          </div>
+
+          {/* Right: Intelligence panel — 62% width */}
+          <div className="w-[62%] flex flex-col px-6 py-5 overflow-hidden">
+            {/* Right panel header */}
+            <div className="flex-shrink-0 flex items-center justify-between mb-5">
+              <div>
+                <h2 className="text-xs font-mono text-slate-500 uppercase tracking-widest">Intelligence Layer</h2>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-mono text-slate-600">
+                <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                Supabase · Gemini · Live
+              </div>
+            </div>
+
+            {/* Right panel content */}
+            <div className="flex-1 overflow-hidden">
+              {panelState === 'dashboard' && <DashboardPanel dashboardData={dashboardData} />}
+              {panelState === 'loading' && <LoadingPanel />}
+              {panelState === 'analysis' && analysisData && (
+                <AnalysisPanel analysis={analysisData} onReset={resetAnalysis} />
+              )}
+            </div>
+
+            {/* Bottom badge */}
+            <div className="flex-shrink-0 pt-3 flex justify-end">
+              <span className="text-xs font-mono text-slate-700">Powered by Gemini + Supabase</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Mount React app
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
